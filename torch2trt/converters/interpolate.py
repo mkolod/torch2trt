@@ -21,7 +21,7 @@ def get_interpolate_plugin(size, mode, align_corners):
     return creator.deserialize_plugin(PLUGIN_NAME, torch2trt_plugin.serializeToString())
 
 
-@tensorrt_converter('torch.nn.functional.interpolate', enabled=trt_version() < '7.1' and has_interpolate_plugin())
+@tensorrt_converter('torch.nn.functional.interpolate', enabled=has_interpolate_plugin())
 def convert_interpolate_plugin(ctx):
     input = ctx.method_args[0]
     input_trt = trt_(ctx.network, input)
@@ -47,7 +47,7 @@ def convert_interpolate_plugin(ctx):
 
     output._trt = layer.get_output(0)
 
-                                                  
+'''                                                
 @tensorrt_converter('torch.nn.functional.interpolate', enabled=trt_version() >= '7.1')
 @tensorrt_converter('torch.nn.functional.upsample', enabled=trt_version() >= '7.1')
 def convert_interpolate_trt7(ctx):                                     
@@ -89,6 +89,7 @@ def convert_interpolate_trt7(ctx):
         layer.align_corners = align_corners
 
     output._trt = layer.get_output(0)
+'''                                                
 
 
 class Interpolate(torch.nn.Module):

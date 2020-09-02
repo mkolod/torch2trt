@@ -8,7 +8,7 @@
 #include <ATen/cuda/CUDAEvent.h>
 #include <torch/torch.h>
 #include <cuda_runtime_api.h>
-
+#include <cuda_fp16.h>
 #include <algorithm>
 
 using namespace nvinfer1;
@@ -27,13 +27,18 @@ __global__ void bilinearForwardKernel(
     const int output_size, const int num_channels, const int input_height,
     const int input_width, const int output_height, const int output_width,
     const scalar_t *const __restrict__ X, scalar_t *const __restrict__ Y) {
+
+  const int index = blockDim.x * blockIdx.x + threadIdx.x;
+
+  if (index >= output_size) {
+	  return;
+  }
+
   const float height_scale = 1.0f * output_height / input_height;
   const float width_scale = 1.0f * output_width / input_width;
 
   const int batch_size =
       output_size / num_channels / output_height / output_width;
-
-  const int index = blockDim.x * blockIdx.x + threadIdx.x;
 
   int indexTemp = index;
   const int out_x = indexTemp % output_width;
@@ -63,17 +68,17 @@ __global__ void bilinearForwardKernel(
   for (int n = 0; n < batch_size; n++) {
     for (int c = 0; c < num_channels; c++) {
       Y[idx(n, num_channels, c, output_height, output_width, out_y, out_x)] =
-          static_cast<scalar_t>(
+          __float2half(
               h0lambda *
-                  (w0lambda * __ldg(&X[idx(n, num_channels, c, input_height,
-                                           input_width, h1, w1)]) +
-                   w1lambda * __ldg(&X[idx(n, num_channels, c, input_height,
-                                           input_width, h1, w1 + w1p)])) +
+                  (w0lambda * __half2float(__ldg(&X[idx(n, num_channels, c, input_height,
+                                           input_width, h1, w1)])) +
+                   w1lambda * __half2float(__ldg(&X[idx(n, num_channels, c, input_height,
+                                           input_width, h1, w1 + w1p)]))) +
               h1lambda *
-                  (w0lambda * __ldg(&X[idx(n, num_channels, c, input_height,
-                                           input_width, h1 + h1p, w1)]) +
-                   w1lambda * __ldg(&X[idx(n, num_channels, c, input_height,
-                                           input_width, h1 + h1p, w1 + w1p)])));
+                  (w0lambda * __half2float(__ldg(&X[idx(n, num_channels, c, input_height,
+                                           input_width, h1 + h1p, w1)])) +
+                   w1lambda * __half2float(__ldg(&X[idx(n, num_channels, c, input_height,
+                                           input_width, h1 + h1p, w1 + w1p)]))));
     }
   }
 }
@@ -263,10 +268,17 @@ public:
     dim3 grid((output_size + block.x - 1) / block.x, 1, 1);
 
     // TODO: This should check types and use either float or half.
-    bilinearForwardKernel<float><<<grid, block, 0, stream>>>(
+ /*
+    __global__ void bilinearForwardKernel(
+    const int output_size, const int num_channels, const int input_height,
+    const int input_width, const int output_height, const int output_width,
+    const scalar_t *const __restrict__ X, scalar_t *const __restrict__ Y) {
+*/ 
+
+    bilinearForwardKernel<__half><<<grid, block, 0, stream>>>(
 		    output_size, channels, input_height, input_width, 
 		    output_height, output_width,
-		    static_cast<const float*>(inputs[0]), static_cast<float*>(outputs[0])
+		    static_cast<const __half*>(inputs[0]), static_cast<__half*>(outputs[0])
     );
 
     return 0;
