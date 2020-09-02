@@ -9,7 +9,8 @@ def has_interpolate_plugin():
     try:
         from torch2trt.plugins import InterpolatePlugin
         return True
-    except:
+    except Exception as e:
+        print(e)
         return False
     
 def get_interpolate_plugin(size, mode, align_corners):
@@ -21,7 +22,7 @@ def get_interpolate_plugin(size, mode, align_corners):
     return creator.deserialize_plugin(PLUGIN_NAME, torch2trt_plugin.serializeToString())
 
 
-@tensorrt_converter('torch.nn.functional.interpolate', enabled=trt_version() < '7.1' and has_interpolate_plugin())
+@tensorrt_converter('torch.nn.functional.interpolate', enabled=has_interpolate_plugin())
 def convert_interpolate_plugin(ctx):
     input = ctx.method_args[0]
     input_trt = trt_(ctx.network, input)
@@ -47,7 +48,7 @@ def convert_interpolate_plugin(ctx):
 
     output._trt = layer.get_output(0)
 
-                                                  
+'''                                                
 @tensorrt_converter('torch.nn.functional.interpolate', enabled=trt_version() >= '7.1')
 @tensorrt_converter('torch.nn.functional.upsample', enabled=trt_version() >= '7.1')
 def convert_interpolate_trt7(ctx):                                     
@@ -89,6 +90,7 @@ def convert_interpolate_trt7(ctx):
         layer.align_corners = align_corners
 
     output._trt = layer.get_output(0)
+'''
 
 
 class Interpolate(torch.nn.Module):
@@ -125,55 +127,55 @@ def test_interpolate_area():
 def test_upsample_scale_factor2():
     return nn.Upsample(scale_factor=2, mode='bilinear',align_corners=False)
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,2,12,12)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,2,12,12)], enabled=trt_version() >= '7.1'  and has_interpolate_plugin())
 def test_nearest_mode():
     return torch.nn.Upsample(scale_factor=2, mode="nearest")
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,4,12,12)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,4,12,12)], enabled=trt_version() >= '7.1'  and has_interpolate_plugin())
 def test_bilinear_mode():
     return torch.nn.Upsample(scale_factor=3, mode="bilinear",align_corners=False)
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,3,12,12)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,3,12,12)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
 def test_align_corner():
     return torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,5,13,13)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,5,13,13)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
 def test_bilinear_mode_odd_input_shape():
     return torch.nn.Upsample(scale_factor=2,mode="bilinear",align_corners=False)
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,4,12,12)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,4,12,12)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
 def test_size_parameter():
     return torch.nn.Upsample(size=3,mode="nearest")
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,3,13,13)], enabled=trt_version() >= '7.1')
-@add_module_test(torch.float32, torch.device('cuda'), [(1,3,1,1)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,3,13,13)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
+@add_module_test(torch.float32, torch.device('cuda'), [(1,3,1,1)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
 def test_size_parameter_odd_input():
     return torch.nn.Upsample(size=[6,3],mode="nearest")
 
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,4,6,6,6)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,4,6,6,6)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
 def test_nearest_mode_3d():
     return torch.nn.Upsample(scale_factor=2, mode="nearest")
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,3,5,5,5)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,3,5,5,5)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
 def test_bilinear_mode_3d():
     return torch.nn.Upsample(scale_factor=3, mode="trilinear",align_corners=False)
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,4,8,8,8)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,4,8,8,8)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
 def test_align_corner_3d():
     return torch.nn.Upsample(scale_factor=4, mode="trilinear", align_corners=True)
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,6,7,7,7)], enabled=trt_version() >= '7.1')
-@add_module_test(torch.float32, torch.device('cuda'), [(1,3,2,4,4)], enabled=trt_version() >= '7.1')
-@add_module_test(torch.float32, torch.device('cuda'), [(1,3,1,1,1)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,6,7,7,7)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
+@add_module_test(torch.float32, torch.device('cuda'), [(1,3,2,4,4)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
+@add_module_test(torch.float32, torch.device('cuda'), [(1,3,1,1,1)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
 def test_bilinear_mode_odd_input_shape_3d():
     return torch.nn.Upsample(scale_factor=2, mode="trilinear",align_corners=False)
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,1,12,12,12)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,1,12,12,12)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
 def test_size_parameter_3d():
     return torch.nn.Upsample(size=3,mode="trilinear", align_corners=True)
 
-@add_module_test(torch.float32, torch.device('cuda'), [(1,3,7,9,5)], enabled=trt_version() >= '7.1')
-@add_module_test(torch.float32, torch.device('cuda'), [(1,4,3,5,1)], enabled=trt_version() >= '7.1')
+@add_module_test(torch.float32, torch.device('cuda'), [(1,3,7,9,5)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
+@add_module_test(torch.float32, torch.device('cuda'), [(1,4,3,5,1)], enabled=trt_version() >= '7.1' and has_interpolate_plugin())
 def test_size_parameter_odd_input_3d():
     return torch.nn.Upsample(size=[11,14,17],mode="trilinear", align_corners=False)
