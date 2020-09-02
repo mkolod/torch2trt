@@ -14,7 +14,7 @@ ext_modules = []
 plugins_ext_module = CUDAExtension(
         name='plugins', 
         sources=[
-            'torch2trt/plugins/interpolate.cpp'
+            'torch2trt/plugins/interpolate.cu'
         ],
         include_dirs=[
             trt_inc_dir()

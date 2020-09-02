@@ -9,11 +9,75 @@
 #include <torch/torch.h>
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
+
 using namespace nvinfer1;
 
 namespace torch2trt {
 
-    
+__device__ __forceinline__ int idx(const int n, const int num_channels,
+                                   const int c, const int height,
+                                   const int width, const int y, const int x) {
+  return ((n * num_channels + c) * height + y) * width + x;
+}
+
+// input is X, output is Y
+template <typename scalar_t>
+__global__ void bilinearForwardKernel(
+    const int output_size, const int num_channels, const int input_height,
+    const int input_width, const int output_height, const int output_width,
+    const scalar_t *const __restrict__ X, scalar_t *const __restrict__ Y) {
+  const float height_scale = 1.0f * output_height / input_height;
+  const float width_scale = 1.0f * output_width / input_width;
+
+  const int batch_size =
+      output_size / num_channels / output_height / output_width;
+
+  const int index = blockDim.x * blockIdx.x + threadIdx.x;
+
+  int indexTemp = index;
+  const int out_x = indexTemp % output_width;
+  indexTemp /= output_width;
+  const int out_y = indexTemp % output_height;
+
+  const int in_y = fminf(out_y / height_scale, input_height - 1);
+  const int in_x = fminf(out_x / width_scale, input_width - 1);
+
+  const float rheight =
+      output_height > 1 ? (input_height - 1.f) / (output_height - 1.f) : 0.f;
+  const float rwidth =
+      output_width > 1 ? (input_width - 1.f) / (output_width - 1.f) : 0.f;
+
+  const float h1r = rheight * out_y;
+  const int h1 = static_cast<int>(h1r);
+  const int h1p = (h1 < input_height - 1) ? 1 : 0;
+  const float h1lambda = h1r - h1;
+  const float h0lambda = 1.f - h1lambda;
+
+  const float w1r = rwidth * out_x;
+  const int w1 = static_cast<int>(w1r);
+  const int w1p = (w1 < input_width - 1) ? 1 : 0;
+  const float w1lambda = w1r - w1;
+  const float w0lambda = 1.f - w1lambda;
+
+  for (int n = 0; n < batch_size; n++) {
+    for (int c = 0; c < num_channels; c++) {
+      Y[idx(n, num_channels, c, output_height, output_width, out_y, out_x)] =
+          static_cast<scalar_t>(
+              h0lambda *
+                  (w0lambda * __ldg(&X[idx(n, num_channels, c, input_height,
+                                           input_width, h1, w1)]) +
+                   w1lambda * __ldg(&X[idx(n, num_channels, c, input_height,
+                                           input_width, h1, w1 + w1p)])) +
+              h1lambda *
+                  (w0lambda * __ldg(&X[idx(n, num_channels, c, input_height,
+                                           input_width, h1 + h1p, w1)]) +
+                   w1lambda * __ldg(&X[idx(n, num_channels, c, input_height,
+                                           input_width, h1 + h1p, w1 + w1p)])));
+    }
+  }
+}
+
 class InterpolatePlugin : public IPluginV2 {
 private:
     
@@ -187,42 +251,23 @@ public:
     batch_input_sizes.insert(batch_input_sizes.begin(), batchSize);
     batch_output_sizes.insert(batch_output_sizes.begin(), batchSize);
 
-    // create tensor wrappers
-    at::Tensor input = at::from_blob((void*) inputs[0], batch_input_sizes, [](void*){}, tensor_options);
-    at::Tensor output = at::from_blob(outputs[0], batch_output_sizes, [](void*){}, tensor_options);
+    const int output_size = std::accumulate(batch_output_sizes.begin(), batch_output_sizes.end(), 1, std::multiplies<long>());
+    const int channels = input_sizes[0];
+    const int input_height = input_sizes[1];
+    const int input_width = input_sizes[2];
 
-    // create new torch cuda stream
-    at::cuda::CUDAStream torch_stream = at::cuda::getStreamFromPool();
-    at::cuda::CUDAStreamGuard torch_guard(torch_stream);
+    const int output_height = output_sizes[1];
+    const int output_width = output_sizes[2];
 
-    // capture current work on tensorrt cuda stream
-    cudaEvent_t event;
-    cudaEventCreate(&event);
-    cudaEventRecord(event, stream);
+    dim3 block(32, 1, 1);
+    dim3 grid((output_size + block.x - 1) / block.x, 1, 1);
 
-    // make torch cuda stream wait on tensorrt work
-    cudaStreamWaitEvent(torch_stream.stream(), event, 0);
-
-    // enqueue work
-    if (mode == "bilinear") {
-      at::upsample_bilinear2d_out(output, input, {size[0], size[1]}, align_corners);
-    } else if (mode == "nearest") {
-      at::upsample_nearest2d_out(output, input, {size[0], size[1]});
-    } else if (mode == "area") {
-      at::adaptive_avg_pool2d_out(output, input, {size[0], size[1]});
-    } else if (mode == "bicubic") {
-      at::upsample_bicubic2d_out(output, input, {size[0], size[1]}, align_corners);
-    }
-
-    // capture event on enqueued stream
-    cudaEvent_t torch_event;
-    cudaEventCreate(&torch_event);
-    cudaEventRecord(torch_event, torch_stream.stream());
-
-    cudaStreamWaitEvent(stream, torch_event, 0);
-
-    cudaEventDestroy(event);
-    cudaEventDestroy(torch_event);
+    // TODO: This should check types and use either float or half.
+    bilinearForwardKernel<float><<<grid, block, 0, stream>>>(
+		    output_size, channels, input_height, input_width, 
+		    output_height, output_width,
+		    static_cast<const float*>(inputs[0]), static_cast<float*>(outputs[0])
+    );
 
     return 0;
   }
