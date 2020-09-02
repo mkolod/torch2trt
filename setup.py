@@ -1,6 +1,8 @@
 import sys
 import torch
 from setuptools import setup, find_packages
+import torch.utils.cpp_extension as ext
+ext.COMMON_NVCC_FLAGS = [x for x in ext.COMMON_NVCC_FLAGS if 'NO_HALF' not in x]
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CppExtension
 
 def trt_inc_dir():
@@ -26,8 +28,8 @@ plugins_ext_module = CUDAExtension(
             'nvinfer'
         ],
         extra_compile_args={
-            'cxx': ['-DUSE_DEPRECATED_INTLIST'] if torch.__version__ < "1.5" else [],
-            'nvcc': []
+            'cxx': ['-DUSE_DEPRECATED_INTLIST', '-std=c++14', '-O2'] if torch.__version__ < "1.5" else [],
+            'nvcc': ['-std=c++14', '-O2']
         }
 )
 

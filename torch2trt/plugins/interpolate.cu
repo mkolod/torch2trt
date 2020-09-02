@@ -10,6 +10,7 @@
 #include <cuda_runtime_api.h>
 #include <cuda_fp16.h>
 #include <algorithm>
+#include <stdexcept>
 
 using namespace nvinfer1;
 
@@ -65,19 +66,19 @@ __global__ void bilinearForwardKernel(
   const float w1lambda = w1r - w1;
   const float w0lambda = 1.f - w1lambda;
 
-  for (int n = 0; n < batch_size; n++) {
+ for (int n = 0; n < batch_size; n++) {
     for (int c = 0; c < num_channels; c++) {
       Y[idx(n, num_channels, c, output_height, output_width, out_y, out_x)] =
-          __float2half(
+          static_cast<scalar_t>(
               h0lambda *
-                  (w0lambda * __half2float(__ldg(&X[idx(n, num_channels, c, input_height,
+                  (w0lambda * static_cast<float>(__ldg(&X[idx(n, num_channels, c, input_height,
                                            input_width, h1, w1)])) +
-                   w1lambda * __half2float(__ldg(&X[idx(n, num_channels, c, input_height,
+                   w1lambda * static_cast<float>(__ldg(&X[idx(n, num_channels, c, input_height,
                                            input_width, h1, w1 + w1p)]))) +
               h1lambda *
-                  (w0lambda * __half2float(__ldg(&X[idx(n, num_channels, c, input_height,
+                  (w0lambda * static_cast<float>(__ldg(&X[idx(n, num_channels, c, input_height,
                                            input_width, h1 + h1p, w1)])) +
-                   w1lambda * __half2float(__ldg(&X[idx(n, num_channels, c, input_height,
+                   w1lambda * static_cast<float>(__ldg(&X[idx(n, num_channels, c, input_height,
                                            input_width, h1 + h1p, w1 + w1p)]))));
     }
   }
@@ -256,30 +257,32 @@ public:
     batch_input_sizes.insert(batch_input_sizes.begin(), batchSize);
     batch_output_sizes.insert(batch_output_sizes.begin(), batchSize);
 
-    const int output_size = std::accumulate(batch_output_sizes.begin(), batch_output_sizes.end(), 1, std::multiplies<long>());
-    const int channels = input_sizes[0];
-    const int input_height = input_sizes[1];
-    const int input_width = input_sizes[2];
+    const int output_size = static_cast<int>(std::accumulate(batch_output_sizes.begin(), batch_output_sizes.end(), 1, std::multiplies<long>()));
+    const int channels = static_cast<int>(input_sizes[0]);
+    const int input_height = static_cast<int>(input_sizes[1]);
+    const int input_width = static_cast<int>(input_sizes[2]);
 
-    const int output_height = output_sizes[1];
-    const int output_width = output_sizes[2];
+    const int output_height = static_cast<int>(output_sizes[1]);
+    const int output_width = static_cast<int>(output_sizes[2]);
 
     dim3 block(32, 1, 1);
     dim3 grid((output_size + block.x - 1) / block.x, 1, 1);
 
-    // TODO: This should check types and use either float or half.
- /*
-    __global__ void bilinearForwardKernel(
-    const int output_size, const int num_channels, const int input_height,
-    const int input_width, const int output_height, const int output_width,
-    const scalar_t *const __restrict__ X, scalar_t *const __restrict__ Y) {
-*/ 
-
-    bilinearForwardKernel<__half><<<grid, block, 0, stream>>>(
-		    output_size, channels, input_height, input_width, 
-		    output_height, output_width,
-		    static_cast<const __half*>(inputs[0]), static_cast<__half*>(outputs[0])
-    );
+    if (tensor_options.dtype() == torch::kFloat32) {
+        bilinearForwardKernel<float><<<grid, block, 0, stream>>>(
+    		    output_size, channels, input_height, input_width, 
+    		    output_height, output_width,
+    		    static_cast<const float*>(inputs[0]), static_cast<float*>(outputs[0])
+	);
+    } else if (tensor_options.dtype() == torch::kFloat16) {
+        bilinearForwardKernel<__half><<<grid, block, 0, stream>>>(
+    		    output_size, channels, input_height, input_width, 
+    		    output_height, output_width,
+    		    static_cast<const __half*>(inputs[0]), static_cast<__half*>(outputs[0])
+        );
+    } else {
+	    throw std::runtime_error("interpolation plugin can only operate on fp16 or fp32");
+    }
 
     return 0;
   }
