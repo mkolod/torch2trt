@@ -22,12 +22,19 @@ __device__ __forceinline__ int idx(const int n, const int num_channels,
   return ((n * num_channels + c) * height + y) * width + x;
 }
 
+__device__ __forceinline__ float area_pixel_compute_source_index(
+    const float scale,
+    const int dst_index,
+    const bool align_corners) {
+  return align_corners ? scale * dst_index : scale * (dst_index + 0.5f) - 0.5f;
+}
+
 // input is X, output is Y
 template <typename scalar_t>
 __global__ void bilinearForwardKernel(
     const int output_size, const int num_channels, const int input_height,
     const int input_width, const int output_height, const int output_width,
-    const scalar_t *const __restrict__ X, scalar_t *const __restrict__ Y) {
+    const scalar_t *const __restrict__ X, scalar_t *const __restrict__ Y, const bool align_corners) {
 
   const int index = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -54,13 +61,13 @@ __global__ void bilinearForwardKernel(
   const float rwidth =
       output_width > 1 ? (input_width - 1.f) / (output_width - 1.f) : 0.f;
 
-  const float h1r = rheight * out_y;
+  const float h1r = area_pixel_compute_source_index(rheight, out_y, align_corners); //  rheight * out_y;
   const int h1 = static_cast<int>(h1r);
   const int h1p = (h1 < input_height - 1) ? 1 : 0;
   const float h1lambda = h1r - h1;
   const float h0lambda = 1.f - h1lambda;
 
-  const float w1r = rwidth * out_x;
+  const float w1r = area_pixel_compute_source_index(rwidth, out_x, align_corners); //rwidth * out_x;
   const int w1 = static_cast<int>(w1r);
   const int w1p = (w1 < input_width - 1) ? 1 : 0;
   const float w1lambda = w1r - w1;
@@ -272,13 +279,13 @@ public:
         bilinearForwardKernel<float><<<grid, block, 0, stream>>>(
     		    output_size, channels, input_height, input_width, 
     		    output_height, output_width,
-    		    static_cast<const float*>(inputs[0]), static_cast<float*>(outputs[0])
+    		    static_cast<const float*>(inputs[0]), static_cast<float*>(outputs[0]), align_corners
 	);
     } else if (tensor_options.dtype() == torch::kFloat16) {
         bilinearForwardKernel<__half><<<grid, block, 0, stream>>>(
     		    output_size, channels, input_height, input_width, 
     		    output_height, output_width,
-    		    static_cast<const __half*>(inputs[0]), static_cast<__half*>(outputs[0])
+    		    static_cast<const __half*>(inputs[0]), static_cast<__half*>(outputs[0]), align_corners
         );
     } else {
 	    throw std::runtime_error("interpolation plugin can only operate on fp16 or fp32");
