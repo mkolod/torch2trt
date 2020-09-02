@@ -29,6 +29,7 @@ __device__ __forceinline__ float area_pixel_compute_source_index(
   return align_corners ? scale * dst_index : scale * (dst_index + 0.5f) - 0.5f;
 }
 
+
 // input is X, output is Y
 template <typename scalar_t>
 __global__ void bilinearForwardKernel(
@@ -56,10 +57,14 @@ __global__ void bilinearForwardKernel(
   const int in_y = fminf(out_y / height_scale, input_height - 1);
   const int in_x = fminf(out_x / width_scale, input_width - 1);
 
-  const float rheight =
-      output_height > 1 ? (input_height - 1.f) / (output_height - 1.f) : 0.f;
-  const float rwidth =
-      output_width > 1 ? (input_width - 1.f) / (output_width - 1.f) : 0.f;
+  float rheight, rwidth;
+  if (align_corners) {
+      rheight = output_height > 1 ? (input_height - 1.f) / (output_height - 1.f) : 0.f;
+      rwidth = output_width > 1 ? (input_width - 1.f) / (output_width - 1.f) : 0.f;
+  } else {
+      rheight = output_height > 0 ? (1.0 * input_height / output_height) : 0.f;
+      rwidth = output_width > 0 ? (1.0 * input_width / output_width) : 0.f;
+  }
 
   const float h1r = area_pixel_compute_source_index(rheight, out_y, align_corners); //  rheight * out_y;
   const int h1 = static_cast<int>(h1r);
