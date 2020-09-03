@@ -263,12 +263,62 @@ public:
 
   size_t getWorkspaceSize(int maxBatchSize) const override { return 0; }
 
-  int enqueue(int batchSize, const void* const* inputs, void** outputs, void* workspace, cudaStream_t stream) override {
+ int enqueue_legacy(int batchsize, const void* const* inputs, void** outputs, void* workspace, cudaStream_t stream) {
     // get input / output dimensions
     std::vector<long> batch_input_sizes = input_sizes;
     std::vector<long> batch_output_sizes = output_sizes;
-    batch_input_sizes.insert(batch_input_sizes.begin(), batchSize);
-    batch_output_sizes.insert(batch_output_sizes.begin(), batchSize);
+    batch_input_sizes.insert(batch_input_sizes.begin(), batchsize);
+    batch_output_sizes.insert(batch_output_sizes.begin(), batchsize);
+
+    // create tensor wrappers
+    at::Tensor input = at::from_blob((void*) inputs[0], batch_input_sizes, [](void*){}, tensor_options);
+    at::Tensor output = at::from_blob(outputs[0], batch_output_sizes, [](void*){}, tensor_options);
+
+    // create new torch cuda stream
+    at::cuda::CUDAStream torch_stream = at::cuda::getStreamFromPool();
+    at::cuda::CUDAStreamGuard torch_guard(torch_stream);
+
+    // capture current work on tensorrt cuda stream
+    cudaEvent_t event;
+    cudaEventCreate(&event);
+    cudaEventRecord(event, stream);
+
+    // make torch cuda stream wait on tensorrt work
+    cudaStreamWaitEvent(torch_stream.stream(), event, 0);
+
+    // enqueue work
+    if (mode == "nearest") {
+      at::upsample_nearest2d_out(output, input, {size[0], size[1]});
+    } else if (mode == "area") {
+      at::adaptive_avg_pool2d_out(output, input, {size[0], size[1]});
+    } else if (mode == "bicubic") {
+      at::upsample_bicubic2d_out(output, input, {size[0], size[1]}, align_corners);
+    }
+
+    // capture event on enqueued stream
+    cudaEvent_t torch_event;
+    cudaEventCreate(&torch_event);
+    cudaEventRecord(torch_event, torch_stream.stream());
+
+    cudaStreamWaitEvent(stream, torch_event, 0);
+
+    cudaEventDestroy(event);
+    cudaEventDestroy(torch_event);
+
+    return 0;
+  }
+
+  int enqueue(int batchsize, const void* const* inputs, void** outputs, void* workspace, cudaStream_t stream) override {
+
+    // Bilinear is fixed, providing fallback for nearest, area and bicubic until those are fixed too
+    if (mode != "bilinear") {
+	    return enqueue_legacy(batchsize, inputs, outputs, workspace, stream);
+    }
+
+    std::vector<long> batch_input_sizes = input_sizes;
+    std::vector<long> batch_output_sizes = output_sizes;
+    batch_input_sizes.insert(batch_input_sizes.begin(), batchsize);
+    batch_output_sizes.insert(batch_output_sizes.begin(), batchsize);
 
     const int output_size = static_cast<int>(std::accumulate(batch_output_sizes.begin(), batch_output_sizes.end(), 1, std::multiplies<long>()));
     const int channels = static_cast<int>(input_sizes[0]);
@@ -283,14 +333,14 @@ public:
 
     if (tensor_options.dtype() == torch::kFloat32) {
         bilinearForwardKernel<float><<<grid, block, 0, stream>>>(
-		    batchSize,
+		    batchsize,
     		    output_size, channels, input_height, input_width, 
     		    output_height, output_width,
     		    static_cast<const float*>(inputs[0]), static_cast<float*>(outputs[0]), align_corners
 	);
     } else if (tensor_options.dtype() == torch::kFloat16) {
         bilinearForwardKernel<__half><<<grid, block, 0, stream>>>(
-		    batchSize,
+		    batchsize,
     		    output_size, channels, input_height, input_width, 
     		    output_height, output_width,
     		    static_cast<const __half*>(inputs[0]), static_cast<__half*>(outputs[0]), align_corners

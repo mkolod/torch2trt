@@ -28,7 +28,7 @@ plugins_ext_module = CUDAExtension(
             'nvinfer'
         ],
         extra_compile_args={
-            'cxx': ['-DUSE_DEPRECATED_INTLIST', '-std=c++14', '-O2'] if torch.__version__ < "1.5" else [],
+            'cxx': ['-DUSE_DEPRECATED_INTLIST', '-std=c++14', '-O2'] if torch.__version__ < "1.5" else ['-std=c++14', '-O2'],
             'nvcc': ['-std=c++14', '-O2']
         }
 )
