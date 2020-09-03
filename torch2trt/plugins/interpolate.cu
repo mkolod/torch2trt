@@ -26,13 +26,20 @@ __device__ __forceinline__ float area_pixel_compute_source_index(
     const float scale,
     const int dst_index,
     const bool align_corners) {
-  return align_corners ? scale * dst_index : scale * (dst_index + 0.5f) - 0.5f;
+	if (align_corners) {
+		return scale * dst_index;
+	} else {
+		const float src_idx = scale * (dst_index + 0.5) - 0.5;
+		return (src_idx < 0) ? 0.0f : src_idx;
+	}
+//  return align_corners ? scale * dst_index : scale * (dst_index + 0.5f) - 0.5f;
 }
 
 
 // input is X, output is Y
 template <typename scalar_t>
 __global__ void bilinearForwardKernel(
+    const int batch_size,
     const int output_size, const int num_channels, const int input_height,
     const int input_width, const int output_height, const int output_width,
     const scalar_t *const __restrict__ X, scalar_t *const __restrict__ Y, const bool align_corners) {
@@ -43,36 +50,30 @@ __global__ void bilinearForwardKernel(
 	  return;
   }
 
-  const float height_scale = 1.0f * output_height / input_height;
-  const float width_scale = 1.0f * output_width / input_width;
-
-  const int batch_size =
-      output_size / num_channels / output_height / output_width;
-
   int indexTemp = index;
-  const int out_x = indexTemp % output_width;
+  const int w2 = indexTemp % output_width;
   indexTemp /= output_width;
-  const int out_y = indexTemp % output_height;
+  const int h2 = indexTemp % output_height;
 
-  const int in_y = fminf(out_y / height_scale, input_height - 1);
-  const int in_x = fminf(out_x / width_scale, input_width - 1);
+//  const int w2 = index % output_width;
+//  const int h2 = index / output_width;
 
   float rheight, rwidth;
   if (align_corners) {
-      rheight = output_height > 1 ? (input_height - 1.f) / (output_height - 1.f) : 0.f;
-      rwidth = output_width > 1 ? (input_width - 1.f) / (output_width - 1.f) : 0.f;
+      rheight = output_height > 1 ? 1.f * (input_height - 1) / (output_height - 1) : 0.f;
+      rwidth = output_width > 1 ? 1.f * (input_width - 1) / (output_width - 1) : 0.f;
   } else {
-      rheight = output_height > 0 ? (1.0 * input_height / output_height) : 0.f;
-      rwidth = output_width > 0 ? (1.0 * input_width / output_width) : 0.f;
+      rheight = output_height > 0 ? (1.f * input_height / output_height) : 0.f;
+      rwidth = output_width > 0 ? (1.f * input_width / output_width) : 0.f;
   }
 
-  const float h1r = area_pixel_compute_source_index(rheight, out_y, align_corners); //  rheight * out_y;
+  const float h1r = area_pixel_compute_source_index(rheight, h2, align_corners); //  rheight * out_y;
   const int h1 = static_cast<int>(h1r);
   const int h1p = (h1 < input_height - 1) ? 1 : 0;
   const float h1lambda = h1r - h1;
   const float h0lambda = 1.f - h1lambda;
 
-  const float w1r = area_pixel_compute_source_index(rwidth, out_x, align_corners); //rwidth * out_x;
+  const float w1r = area_pixel_compute_source_index(rwidth, w2, align_corners); //rwidth * out_x;
   const int w1 = static_cast<int>(w1r);
   const int w1p = (w1 < input_width - 1) ? 1 : 0;
   const float w1lambda = w1r - w1;
@@ -80,7 +81,7 @@ __global__ void bilinearForwardKernel(
 
  for (int n = 0; n < batch_size; n++) {
     for (int c = 0; c < num_channels; c++) {
-      Y[idx(n, num_channels, c, output_height, output_width, out_y, out_x)] =
+      Y[idx(n, num_channels, c, output_height, output_width, h2, w2)] =
           static_cast<scalar_t>(
               h0lambda *
                   (w0lambda * static_cast<float>(__ldg(&X[idx(n, num_channels, c, input_height,
@@ -282,12 +283,14 @@ public:
 
     if (tensor_options.dtype() == torch::kFloat32) {
         bilinearForwardKernel<float><<<grid, block, 0, stream>>>(
+		    batchSize,
     		    output_size, channels, input_height, input_width, 
     		    output_height, output_width,
     		    static_cast<const float*>(inputs[0]), static_cast<float*>(outputs[0]), align_corners
 	);
     } else if (tensor_options.dtype() == torch::kFloat16) {
         bilinearForwardKernel<__half><<<grid, block, 0, stream>>>(
+		    batchSize,
     		    output_size, channels, input_height, input_width, 
     		    output_height, output_width,
     		    static_cast<const __half*>(inputs[0]), static_cast<__half*>(outputs[0]), align_corners
